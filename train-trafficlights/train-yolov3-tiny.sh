@@ -5,3 +5,5 @@ set -ex
 LD_LIBRARY_PATH=/usr/local/cuda/lib/ ../../darknet/darknet detector train cfg-voc.data yolov3-tiny-trafficlights-train.cfg backup/yolov3-tiny-trafficlights-train.backup
 #../../darknet/darknet detector train cfg-voc.data yolov3-tiny-trafficlights-train.cfg backup/yolov3-tiny-trafficlights-train_200.weights
 #  -gpus 0
+
+# TODO add augmentation (jitter, hue, saturation, exposure): https://github.com/pjreddie/darknet/issues/517#issuecomment-390428948
