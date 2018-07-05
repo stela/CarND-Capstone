@@ -23,20 +23,6 @@ class TLDetector(object):
         self.camera_image = None
         self.lights = []
 
-        sub1 = rospy.Subscriber('/current_pose', PoseStamped, self.pose_cb)
-        sub2 = rospy.Subscriber('/base_waypoints', Lane, self.waypoints_cb)
-
-        '''
-        /vehicle/traffic_lights provides you with the location of the traffic light in 3D map space and
-        helps you acquire an accurate ground truth data source for the traffic light
-        classifier by sending the current color state of all traffic lights in the
-        simulator. When testing on the vehicle, the color state will not be available. You'll need to
-        rely on the position of the light and the camera image to predict it.
-        '''
-        sub3 = rospy.Subscriber('/vehicle/traffic_lights', TrafficLightArray, self.traffic_cb)
-        # TODO consider using image_raw instead, no loss due to color space conversion
-        sub6 = rospy.Subscriber('/image_color', Image, self.image_cb)
-
         self.bridge = CvBridge()
         self.light_classifier = TLClassifier()
         self.listener = tf.TransformListener()
@@ -54,6 +40,22 @@ class TLDetector(object):
         self.config = yaml.load(config_string)
 
         self.upcoming_red_light_pub = rospy.Publisher('/traffic_waypoint', Int32, queue_size=1)
+        self.image_loadshedding_pub = rospy.Publisher('/image_color_loadshedding', Int32, queue_size=1)
+
+        sub1 = rospy.Subscriber('/current_pose', PoseStamped, self.pose_cb)
+        sub2 = rospy.Subscriber('/base_waypoints', Lane, self.waypoints_cb)
+        '''
+        /vehicle/traffic_lights provides you with the location of the traffic light in 3D map space and
+        helps you acquire an accurate ground truth data source for the traffic light
+        classifier by sending the current color state of all traffic lights in the
+        simulator. When testing on the vehicle, the color state will not be available. You'll need to
+        rely on the position of the light and the camera image to predict it.
+        '''
+        sub3 = rospy.Subscriber('/vehicle/traffic_lights', TrafficLightArray, self.traffic_cb)
+        # TODO consider using image_raw instead (if available???), no loss due to color space conversion
+        sub6 = rospy.Subscriber('/image_color', Image, self.image_loadshedding_cb)
+        sub7 = rospy.Subscriber('/image_color_loadshedding', Image, self.image_cb)
+
 
         rospy.spin()
 
@@ -69,6 +71,11 @@ class TLDetector(object):
 
     def traffic_cb(self, msg):
         self.lights = msg.lights
+
+    def image_loadshedding_cb(self, msg):
+        # publish with a single-entry queue, which will discard extra load
+        # the actual queue might actually be larger still due to TCP/IP socket buffering :(
+        self.image_loadshedding_pub.publish(msg)
 
     def image_cb(self, msg):
         """Identifies red lights in the incoming camera image and publishes the index
