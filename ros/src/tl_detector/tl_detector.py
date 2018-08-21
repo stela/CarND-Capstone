@@ -7,6 +7,8 @@ from styx_msgs.msg import Lane
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 from light_classification.tl_classifier import TLClassifier
+from light_classification.tl_classifier_object_detect import TLClassifierObjDetect
+
 import numpy as np
 import tf
 import cv2
@@ -68,13 +70,19 @@ class TLDetector(object):
         # Load the specific Tensorflow graph (site or sim is decided automatically)
         graph_path = self.config['tensorflow_graph_path']
 
-        confidence_thresh = []
-        confidence_thresh.append(self.config['tensorflow_confidence_thesh_green'])
-        confidence_thresh.append(self.config['tensorflow_confidence_thesh_yellow'])
-        confidence_thresh.append(self.config['tensorflow_confidence_thesh_red'])
+        mode = self.config['mode']
+        if mode == 'sim':
+            confidence_thresh = self.config['tensorflow_confidence_thesh']
+            self.light_classifier = TLClassifierObjDetect(path_to_tensorflow_graph=graph_path, confidence_thresh=confidence_thresh)
 
-        # Initialize the classifier
-        self.light_classifier = TLClassifier(path_to_tensorflow_graph=graph_path, thresholds=confidence_thresh)
+        else:
+            confidence_thresh = []
+            confidence_thresh.append(self.config['tensorflow_confidence_thesh_green'])
+            confidence_thresh.append(self.config['tensorflow_confidence_thesh_yellow'])
+            confidence_thresh.append(self.config['tensorflow_confidence_thesh_red'])
+
+            # Initialize the classifier
+            self.light_classifier = TLClassifier(path_to_tensorflow_graph=graph_path, thresholds=confidence_thresh)
 
         '''
         /vehicle/traffic_lights provides you with the location of the traffic light in 3D map space and

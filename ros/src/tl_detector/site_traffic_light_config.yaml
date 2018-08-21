@@ -8,6 +8,7 @@ camera_preprocessing:
   image_height: 512
 stop_line_positions:
     - [8.0, 16.2]
+mode: 'site'
 use_tensorflow_detection: True
 use_tensorflow_nth_frame: 2
 tensorflow_graph_path: 'light_classification/fcn_graph/checkpoint'
