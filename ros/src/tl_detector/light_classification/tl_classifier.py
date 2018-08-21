@@ -19,47 +19,25 @@ class TLClassifier(object):
     https://github.com/tensorflow/models/blob/master/research/object_detection/inference/detection_inference.py
 
     """
-    def __init__(self, path_to_tensorflow_graph, confidence_thresh):
-
-        # Threshold for detections
-        self.detection_threshold = confidence_thresh
+    def __init__(self, path_to_tensorflow_graph, thresholds):
 
         # Create the TensorFlow session in which the graph is loaded
         self.session = tf.Session()
+        self.thresholds = thresholds
 
-        # Create Tensors for results
-        self.num_detections_tensor = None
-        self.detected_boxes_tensor = None
-        self.detected_scores_tensor = None
-        self.detected_labels_tensor = None
-        self.image_tensor = None
+        with self.session.as_default():
+            saver = tf.train.import_meta_graph(path_to_tensorflow_graph+'/model.ckpt.meta')
+            saver.restore(self.session, tf.train.latest_checkpoint(path_to_tensorflow_graph))
 
-        # Load the trained and frozen model graph with respective weights
-        with self.session.graph.as_default():
-            od_graph_def = tf.GraphDef()
-            with tf.gfile.GFile(path_to_tensorflow_graph, 'rb') as fid:
-                serialized_graph = fid.read()
-                od_graph_def.ParseFromString(serialized_graph)
-                tf.import_graph_def(od_graph_def, name='')
+            # Create Tensors for results
+            ops = tf.get_default_graph().get_operations()
+            all_tensor_names = {output.name for op in ops for output in op.outputs}
+            tensor_name_keras_phase = [x for x in all_tensor_names if 'keras_learning_phase' in x][0]
 
-                g = tf.get_default_graph()
-
-                # Remember all the tensors we will need for inference
-                # Most important: input image tensor:
-                self.image_tensor = g.get_tensor_by_name('image_tensor:0')
-
-                self.num_detections_tensor = tf.squeeze(g.get_tensor_by_name('num_detections:0'), 0)
-                self.num_detections_tensor = tf.cast(self.num_detections_tensor, tf.int32)
-
-                self.detected_boxes_tensor = tf.squeeze(g.get_tensor_by_name('detection_boxes:0'), 0)
-                self.detected_boxes_tensor = self.detected_boxes_tensor[:self.num_detections_tensor]
-
-                self.detected_scores_tensor = tf.squeeze(g.get_tensor_by_name('detection_scores:0'), 0)
-                self.detected_scores_tensor = self.detected_scores_tensor[:self.num_detections_tensor]
-
-                self.detected_labels_tensor = tf.squeeze(g.get_tensor_by_name('detection_classes:0'), 0)
-                self.detected_labels_tensor = tf.cast(self.detected_labels_tensor, tf.int64)
-                self.detected_labels_tensor = self.detected_labels_tensor[:self.num_detections_tensor]
+            self.activation_map_tensor = tf.get_default_graph().get_tensor_by_name('conv2d_6/BiasAdd:0')
+            self.activation_map_softmax = tf.nn.softmax(self.activation_map_tensor)
+            self.image_tensor = tf.get_default_graph().get_tensor_by_name('input_1:0')
+            self.learning_phase_tensor = tf.get_default_graph().get_tensor_by_name(tensor_name_keras_phase)
 
     def get_classification(self, image):
         """
@@ -71,10 +49,10 @@ class TLClassifier(object):
         biggest box, since this will be the nearest traffic light.
 
         The graph will give us the following IDs :
-        4: NA
-        3: green
-        2: yellow
-        1: red
+        3: yellow
+        2: red
+        1: none
+        0: green
 
         Args:
             image (cv::Mat): image containing the traffic light
@@ -83,40 +61,39 @@ class TLClassifier(object):
             int: ID of traffic light color (specified in styx_msgs/TrafficLight)
 
         """
+        # Threshold for detections
+        self.class_threshs = {TrafficLight.GREEN: self.thresholds[0],
+                              TrafficLight.YELLOW: self.thresholds[1],
+                              TrafficLight.RED: self.thresholds[2]}
+
+        self.class_indices = {0: TrafficLight.GREEN,
+                              # 1: 'none',
+                              2: TrafficLight.RED,
+                              3: TrafficLight.YELLOW}
 
         traffic_light_id = 4  # 4 equals to unknown
 
-        id_mapping = {4: TrafficLight.UNKNOWN,
-                      3: TrafficLight.GREEN,
-                      2: TrafficLight.YELLOW,
-                      1: TrafficLight.RED}
+        results = self.session.run({'activation_map_softmax' : self.activation_map_softmax },
+                                   feed_dict={self.image_tensor: image,
+                                              self.learning_phase_tensor: False})
 
-        results = []
-        with self.session.graph.as_default():
-            boxes, scores, labels = self.session.run([self.detected_boxes_tensor,
-                                                      self.detected_scores_tensor,
-                                                      self.detected_labels_tensor],
-                                                     feed_dict={self.image_tensor: image})
-            # Filter for probability (score) and classification
-            for i, score in enumerate(scores):
-                if score > self.detection_threshold and labels[i] != traffic_light_id:
-                    results.append({'box': boxes[i],
-                                    'score': score,
-                                    'id': labels[i]})
+        results_aug = self.session.run({'activation_map_softmax' : self.activation_map_softmax },
+                                   feed_dict={self.image_tensor: np.expand_dims(np.fliplr(image[0, :, :, :]), 0),
+                                              self.learning_phase_tensor: False})
 
-        if len(results) > 0:
-            # print('Nums: '+str(len(results))+' '+str(results[0]['score'])+ ' ' + str(results[0]['id']))
 
-            # The boxes are encoded as xmin, xmax, ymin, ymax with normalized coordinates [0..1].
-            # So lets find just the biggest box and take the traffic light state from it.
-            # max_sized_result = max(results, key=lambda bb: (bb['box'][1] - bb['box'][0]) * (bb['box'][3] - bb['box'][2]))
-            # traffic_light_id = max_sized_result['id']
+        activation_map = results['activation_map_softmax'][0, :, :, :]
+        activation_map_aug = results_aug['activation_map_softmax'][0, :, :, :]
+        activation_map = (activation_map + np.fliplr(activation_map_aug)) / 2.0
 
-            # Better take the best score than the biggest box !
-            max_score_result = max(results, key=lambda bb: bb['score'])
-            traffic_light_id = max_score_result['id']
+        class_probabilities = {}
+        [class_probabilities.update({self.class_indices[i]: np.max(activation_map[:, :, i])}) for i in self.class_indices]
 
-        return id_mapping[traffic_light_id]
+        class_prediction = int(max(class_probabilities, key=class_probabilities.get))
+        class_prob = class_probabilities[class_prediction]
+        class_prediction = class_prediction if class_prob > self.class_threshs[class_prediction] else TrafficLight.UNKNOWN
+
+        return class_prediction
 
 
 class TestTLClassifier(object):
